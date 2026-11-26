@@ -1,5 +1,7 @@
 **
 !Dockerfile
+!package.json
+!package-lock.json
 !admin.cjs
 !accounts.cjs
 !backup.cjs
@@ -10,6 +12,7 @@
 !server.cjs
 !settings.cjs
 !store.cjs
+!xlsx-import.cjs
 !v2/
 !v2/app.js
 !v2/data.js

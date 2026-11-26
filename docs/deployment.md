@@ -2,7 +2,7 @@
 
 以下命令均从项目根目录执行。
 
-工单、字段历史、CSV 批次、关联、账号、角色和会话写入 `/data/workspace.sqlite3`。SQLite 使用 WAL，主库、`-wal` 和 `-shm` 会出现在同一个可写的 `/data` 目录。Kubernetes 将整个目录挂到 PVC。Pod 重建后挂回同一 PVC，工单和历史继续可查。请让生产部署始终指向这块 PVC。
+工单、字段历史、导入批次、关联、账号、角色和会话写入 `/data/workspace.sqlite3`。SQLite 使用 WAL，主库、`-wal` 和 `-shm` 会出现在同一个可写的 `/data` 目录。Kubernetes 将整个目录挂到 PVC。Pod 重建后挂回同一 PVC，工单和历史继续可查。请让生产部署始终指向这块 PVC。
 
 选用可重新挂载的块存储 CSI，将卷作为文件系统使用。避免使用 NFS 或其他共享网络文件系统运行 WAL。模板采用 `ReadWriteOnce`、单副本和 `Recreate`。RWO 允许同一节点的多个 Pod 访问卷，应用仍需要配置为单一写入实例。CSI 支持 `ReadWriteOncePod` 时，可将新 PVC 改用该访问模式。升级、重启、暂停均保留 PVC。旧节点状态不明时，先确认旧写入实例已停止及存储已解除挂载，再启动接管的 Pod。
 
@@ -14,7 +14,7 @@
 docker build -t registry.example.com/operations/incident-desk:v2-production-1 .
 ```
 
-[Dockerfile](../Dockerfile) 使用官方 Node 24 LTS 的 Debian slim 镜像，直接启动 `node server.cjs`，没有 npm 运行时依赖。进程 UID/GID 均为 `1000`。镜像只复制运行文件，`/data` 是只读的挂载占位目录，且没有自动创建匿名卷。挂入可写 PVC 后，服务会在空目标创建生产库。使用默认 `INCIDENT_DB` 时，漏挂卷或卷权限不正确会使启动失败。Pod 的根文件系统只读，`fsGroup: 1000` 用于支持卷权限管理的 CSI。确认卷根目录能由 UID/GID 1000 创建文件，服务以 `0600` 创建数据库。已有卷的文件所有者也须兼容此 UID。
+[Dockerfile](../Dockerfile) 使用官方 Node 24 LTS 的 Debian slim 镜像。构建时通过 `npm ci` 安装锁定的 XLSX 依赖，需要访问 npm Registry 和 SheetJS CDN。服务通过 `node server.cjs` 启动并在本机读取表格。进程 UID/GID 均为 `1000`。镜像只复制运行文件，`/data` 是只读的挂载占位目录，且没有自动创建匿名卷。挂入可写 PVC 后，服务会在空目标创建生产库。使用默认 `INCIDENT_DB` 时，漏挂卷或卷权限不正确会使启动失败。Pod 的根文件系统只读，`fsGroup: 1000` 用于支持卷权限管理的 CSI。确认卷根目录能由 UID/GID 1000 创建文件，服务以 `0600` 创建数据库。已有卷的文件所有者也须兼容此 UID。
 
 在部署副本替换以下配置。
 
@@ -22,7 +22,7 @@ docker build -t registry.example.com/operations/incident-desk:v2-production-1 .
 | --- | --- |
 | `k8s/kustomization.yaml` | 镜像地址和版本，以及完整的 HTTPS 源 `PUBLIC_ORIGIN`，例如 `https://tickets.example.com`，不带末尾斜线。处置时限可用 `SLA_P1_HOURS` 至 `SLA_P4_HOURS` 设置，模板为 2、8、24、72 小时，临期窗口固定为一小时。配置变更经 Kustomize 触发 Deployment 替换，并用于按原起算时间计算当前工单时限。 |
 | `k8s/workload.yaml` | 将 `block-csi` 替换为实际的块存储 StorageClass，并按数据量设置 PVC 容量。PVC 应能容纳主库、WAL 以及备份暂存文件。 |
-| `k8s/ingress.yaml` | 设置实际 Ingress class、域名和同一命名空间的 TLS Secret 名称。TLS 终止在 Ingress，保留 HTTPS 客户端的原始 Host，并配置 HTTP 到 HTTPS 的跳转或禁用 HTTP 业务入口。应用 Service 为 ClusterIP。CSV 上限按 JSON 请求体计算，应用接受最多 64 MiB，Ingress 的控制器级配置也须放行所需大小。 |
+| `k8s/ingress.yaml` | 设置实际 Ingress class、域名和同一命名空间的 TLS Secret 名称。TLS 终止在 Ingress，保留 HTTPS 客户端的原始 Host，并配置 HTTP 到 HTTPS 的跳转或禁用 HTTP 业务入口。应用 Service 为 ClusterIP。导入请求体上限为 64 MiB，Ingress 控制器也须放行所需大小。8 MiB XLSX 经 Base64 编码后需要约 11 MiB 请求体。 |
 
 模板包含 PVC、Deployment、ClusterIP Service、TLS Ingress 和生成的 ConfigMap。TLS 证书、私有镜像拉取权限及命名空间由生产平台提供。先渲染复核，确认目标上下文后再部署。
 
@@ -52,19 +52,25 @@ unset desk_bootstrap_password
 | 角色 | 可执行的功能 |
 | --- | --- |
 | 管理员 | 查看工作台、工单、时间线、关联和导入批次，执行全部业务操作，管理账号与角色。系统始终保留至少一名启用的管理员。 |
-| 操作员 | 查看并执行全部业务操作，包括新建工单、编辑来源字段、处置与转派、建立或解除关联、CSV 导入。 |
+| 操作员 | 查看并执行全部业务操作，包括新建工单、编辑来源字段、处置与转派、建立或解除关联、表格导入。 |
 | 只读 | 查看工作台、工单、时间线、关联和导入批次。 |
-| 自定义角色 | 共享上述查看范围，可分别开启手工新建、手工编辑来源字段、处置与转派、关联和 CSV 导入。 |
+| 自定义角色 | 共享上述查看范围，可分别开启手工新建、手工编辑来源字段、处置与转派、关联和表格导入。 |
 
-CSV 导入权限允许按导入规则新建工单和更新来源字段，可与对应手工权限分别配置。负责人可选择启用且有处置权限的账号。停用、重新分配角色、更新其角色的业务权限或重置密码都会撤销既有会话。账号和角色变更在「账号与权限」的操作记录中可查。
+表格导入权限 `csv.import` 同时适用于 CSV 和 XLSX，允许按导入规则新建工单和更新来源字段，可与对应手工权限分别配置。负责人可选择启用且有处置权限的账号。停用、重新分配角色、更新其角色的业务权限或重置密码都会撤销既有会话。账号和角色变更在「账号与权限」的操作记录中可查。
 
 所有管理员都无法登录时，由有权执行 `pods/exec` 的平台管理员使用同样的标准输入方式执行 `node admin.cjs recover-admin ops.admin`。该操作要求目标为启用的管理员，应用历史标记为部署端维护，人员归属可对照集群的执行审计。
 
+## 导入告警表格
+
+在「表格导入」选择或拖入 UTF-8 CSV 或 Excel `.xlsx` 文件。首个非空行为表头，沿用内部云 PD、混合云、GPU 的字段及别名。点击「预览合并结果」。只有一张非空可见工作表时，直接显示预览。若有多张，先选一张，再预览并确认。每次确认提交一张工作表。
+
+XLSX 原文件上限为 8 MiB，且支持最多 32 张普通工作表、20,000 行、256 列。编号可用文本或 `000000` 等补零格式。超过 15 位有效数字的编号请从源资料按文本填写。公式使用文件中已保存的结果。遇到无结果或报错的公式，可在 Excel 修正数据或粘贴为值后重新上传。
+
 ## 字段历史在哪里
 
-打开一条工单，进入「时间线」，可查看每次操作的登录账号与当时姓名、时间、人工或 CSV 来源，以及每个字段的改前和改后。可用「按字段筛选」查看同一个字段历次更改。空字符串显示「空值」，此前没有该字段显示「未存在」，多行保留换行。操作时间由服务器记录为 UTC 毫秒，页面显示北京时间，来源告警里的原始时间仍按原值保存。
+打开一条工单，进入「时间线」，可查看每次操作的登录账号与当时姓名、时间、变更来源，以及字段的改前和改后。可用「按字段筛选」查看同一字段的历次更改。空字符串显示「空值」，此前没有该字段显示「未存在」，多行保留换行。操作时间由服务器记录为 UTC 毫秒，页面显示北京时间，来源告警里的原始时间仍按原值保存。
 
-历史覆盖新建工单、手工字段修改、处置状态与负责人、优先级、业务影响、处置说明、重开与关联，以及 CSV 实际写入。批次页保留导入人、文件名、统计及冲突选值和原 CSV 行号。重复导入保留批次记录，字段没有变化时没有新的字段变更。审计和相关工单在同一 SQLite 事务提交。改名或停用保留既往记录中的旧姓名和稳定账号标识。生产初始化不读取旧试用数据库，也没有可追补的真实旧操作者。应用没有删除工单或改写历史的入口，数据库和平台管理员权限仍能修改底层文件。
+历史覆盖新建工单、手工字段修改、处置状态与负责人、优先级、业务影响、处置说明、重开与关联，以及 CSV 和 XLSX 实际写入。批次页保留导入人、文件名、格式、XLSX 工作表、统计、冲突选值及原表格行号。重复导入保留批次记录，字段没有变化时没有新的字段变更。审计和相关工单在同一 SQLite 事务提交。改名或停用保留既往记录中的旧姓名和稳定账号标识。生产初始化不读取旧试用数据库，也没有可追补的真实旧操作者。应用没有删除工单或改写历史的入口，数据库和平台管理员权限仍能修改底层文件。
 
 ## 在线备份、重启和恢复
 
@@ -108,7 +114,8 @@ kubectl -n "$desk_namespace" delete pod incident-desk-restore --wait=true
 使用 Node 24 LTS 和 OpenSSL 运行隔离测试。测试在临时目录生成合成数据，通过随机回环端口上的 HTTPS 代理访问正常用户入口。
 
 ```bash
-node --test test/production.test.cjs test/rbac.test.cjs
+npm ci --omit=dev --ignore-scripts
+node --test test/production.test.cjs test/rbac.test.cjs test/xlsx-import.test.cjs
 PLAYWRIGHT_MODULE=/path/to/playwright CHROMIUM_EXECUTABLE=/path/to/chromium \
   node --test test/browser.test.cjs
 kubectl kustomize k8s

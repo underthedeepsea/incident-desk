@@ -10,7 +10,7 @@
   const pages = {
     dashboard: { title: '值班工作台', nav: '值班工作台', icon: 'overview' },
     tickets: { title: '工单列表', nav: '工单列表', icon: 'list' },
-    import: { title: 'CSV 导入', nav: 'CSV 导入', icon: 'upload' },
+    import: { title: '表格导入', nav: '表格导入', icon: 'upload' },
     batches: { title: '导入批次', nav: '导入批次', icon: 'file' }
   };
   const icons = {
@@ -44,10 +44,11 @@
   const state = {
     snapshot: null, page: 'dashboard', range: 14, end: "", distribution: 'source',
     filters: { query: '', source: '', status: '', queue: '', page: 1 }, batchId: '',
-    upload: { source: '', doc: null, result: null, plan: null, waiting: false, committing: false, sequence: 0, error: '', choices: new Map() },
+    upload: { source: '', doc: null, sheet: '', sheets: [], result: null, plan: null, waiting: false, committing: false, sequence: 0, error: '', choices: new Map() },
     editor: null
   };
   const allowed = (permission) => state.snapshot.account.permissions.includes(permission);
+  const formatName = (format) => format === 'xlsx' ? 'XLSX' : 'CSV';
   const canSaveSource = (editor) => allowed(editor.uid ? 'ticket.fields' : 'ticket.create');
   const pageSize = 10;
   const compactPlot = window.matchMedia('(max-width: 625px)');
@@ -322,36 +323,37 @@
   function importRules() {
     const rules = [
       ['check', '内容相同', '自动跳过相同的字段值。'],
-      ['plus', '系统为空', '用 CSV 中的有值字段补齐。'],
-      ['local', 'CSV 为空', '保留系统原有字段值。'],
+      ['plus', '系统为空', '用表格中的有值字段补齐。'],
+      ['local', '表格为空', '保留系统原有字段值。'],
       ['alert', '有值且不同', '逐项预览差异，确认后保存。']
     ];
     return `<section class="panel import-rules" aria-labelledby="rules-title"><div class="panel-heading"><div><h2 id="rules-title">字段合并规则</h2><p>按表格来源和事件 ID 精确匹配。</p></div></div>
       <div class="rule-list">${rules.map(([glyph, title, text]) => `<div class="rule"><span>${icon(glyph, 18)}</span><div><strong>${title}</strong><p>${text}</p></div></div>`).join('')}</div>
-      <div class="import-format">${icon('info', 17)}<p>支持 UTF-8 CSV。首行应为表头，匿名列和扩展列均可保留编辑。缺少 ID 的行会标记并跳过。</p></div>
+      <div class="import-format">${icon('info', 17)}<p>支持 UTF-8 CSV 和 XLSX。首个非空行应为表头，缺少 ID 的行会标记并跳过。</p></div>
     </section>`;
   }
   function renderImport() {
     const upload = state.upload;
     const busy = upload.committing ? 'disabled' : '';
-    let content = titleMarkup('CSV 导入', '从告警表格创建或补齐工单，写入前查看合并结果。');
+    let content = titleMarkup('表格导入', '从告警表格创建或补齐工单，写入前查看合并结果。');
     if (upload.result) {
       const { name, inserted, updated } = upload.result;
       content += `<section class="panel import-success"><span class="success-icon">${icon('check', 30)}</span><h2>${inserted || updated ? '导入完成' : '已记录批次'}</h2>
-        <p>${esc(name)} · 新增 ${inserted} 条，更新 ${updated} 条${upload.result.skipped ? `，跳过 ${upload.result.skipped} 条无效记录` : ''}。</p>
+        <p>${esc(name)}${upload.result.sheet ? ' · ' + esc(upload.result.sheet) : ''} · 新增 ${inserted} 条，更新 ${updated} 条${upload.result.skipped ? `，跳过 ${upload.result.skipped} 条无效记录` : ''}。</p>
         <div>${button('reset-import', '继续导入')}<button type="button" class="button primary" data-action="show-batch" data-batch="${esc(upload.result.id)}">查看批次${icon('arrow', 16)}</button></div></section>`;
     } else {
       content += `<div class="import-layout"><section class="panel file-panel" aria-labelledby="upload-title">
         <div class="panel-heading"><div><h2 id="upload-title">上传告警表格</h2><p>内部云 PD、混合云和 GPU 节点告警。</p></div></div>
-        <div class="file-form"><label class="control-label" for="import-source">表格来源</label><select id="import-source" ${busy}>${sourceOptions(upload.source, '从 CSV 表头自动识别')}</select>
-          <input id="csv-file" class="sr-only file-input" type="file" accept=".csv,text/csv" ${busy}>
+        <div class="file-form"><label class="control-label" for="import-source">表格来源</label><select id="import-source" ${busy}>${sourceOptions(upload.source, '从表头自动识别')}</select>
+          <input id="csv-file" class="sr-only file-input" type="file" accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ${busy}>
           <label for="csv-file" class="drop-zone" id="drop-zone">
             <span class="upload-illustration">${icon(upload.doc ? 'file' : 'upload', 27)}</span>
-            <strong>${upload.doc ? esc(upload.doc.name) : '点击选择 CSV，或拖放文件至此'}</strong>
+            <strong>${upload.doc ? esc(upload.doc.name) : '点击选择 CSV 或 XLSX，或拖放文件至此'}</strong>
             <span>${upload.doc ? '点击替换此文件' : '每次上传一个来源的告警表格'}</span>
           </label>
+          ${upload.sheets.length > 1 ? `<label class="control-label" for="import-sheet">Excel 工作表</label><select id="import-sheet" ${busy}><option value="">请选择一个工作表</option>${upload.sheets.map((name) => `<option value="${esc(name)}" ${upload.sheet === name ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select>` : ''}
           ${upload.error && !upload.plan ? `<p class="form-error" role="alert">${icon('alert', 17)}${esc(upload.error)}</p>` : ''}
-          <div class="file-actions"><button type="button" class="button primary" data-action="prepare-import" ${!upload.doc || upload.waiting ? 'disabled' : ''}>${upload.waiting ? '正在生成预览…' : '预览合并结果'}${icon('arrow', 17)}</button>
+          <div class="file-actions"><button type="button" class="button primary" data-action="prepare-import" ${!upload.doc || upload.waiting || (upload.sheets.length > 1 && !upload.sheet) ? 'disabled' : ''}>${upload.waiting ? '正在生成预览…' : '预览合并结果'}${icon('arrow', 17)}</button>
           ${upload.doc ? `<button class="button secondary" type="button" data-action="reset-import" ${busy}>清除文件</button>` : ''}</div>
         </div></section>${importRules()}</div>`;
     }
@@ -365,7 +367,8 @@
         zone.classList.remove('dragging');
         if (state.upload.committing) return;
         if (event.dataTransfer.files.length !== 1) {
-          state.upload.error = '请一次拖入一个 CSV 文件。';
+          resetImport();
+          state.upload.error = '请一次拖入一个 CSV 或 XLSX 文件。';
           renderImport();
         } else receiveFile(event.dataTransfer.files[0]);
       });
@@ -376,17 +379,18 @@
     const { plan, choices, committing } = state.upload;
     const busy = committing ? 'disabled' : '';
     const counts = plan.counts;
+    const format = formatName(plan.format);
     const statistics = [
       ['新增工单', counts.new], ['匹配工单', counts.matched], ['自动补齐格', counts.filled], ['相同跳过格', counts.equal], ['保留原值格', counts.preserved], ['冲突字段', plan.conflicts.length]
     ];
     return `<section class="panel import-preview" id="import-preview" aria-labelledby="preview-heading">
-      <div class="panel-heading"><div><h2 id="preview-heading" tabindex="-1">合并预览</h2><p>${D.sources[plan.source].name} · ${counts.rows} 条有效 CSV 数据${counts.duplicates ? `，含 ${counts.duplicates} 条同批重复记录` : ''}</p></div></div>
+      <div class="panel-heading"><div><h2 id="preview-heading" tabindex="-1">合并预览</h2><p>${D.sources[plan.source].name}${plan.sheet ? ' · ' + esc(plan.sheet) : ''} · ${counts.rows} 条有效 ${format} 数据${counts.duplicates ? `，含 ${counts.duplicates} 条同批重复记录` : ''}</p></div></div>
       <div class="preview-body"><div class="preview-stats">${statistics.map(([label, value]) => `<div><strong>${number.format(value)}</strong><span>${label}</span></div>`).join('')}</div>
-      ${plan.invalidRows.length ? `<details class="invalid-rows" ${plan.invalidRows.length < 6 ? 'open' : ''}><summary>${plan.invalidRows.length} 行将跳过</summary><ul>${plan.invalidRows.map(({ line, message }) => `<li>CSV 第 ${line} 行：${message}</li>`).join('')}</ul></details>` : ''}
-      ${plan.conflicts.length ? `<div class="conflict-group"><div class="conflict-heading"><div><h3>确认冲突字段</h3><p>每个字段选定一个要保存的值。同一 CSV 内出现多个值时，也需要确认。</p></div>
+      ${plan.invalidRows.length ? `<details class="invalid-rows" ${plan.invalidRows.length < 6 ? 'open' : ''}><summary>${plan.invalidRows.length} 行将跳过</summary><ul>${plan.invalidRows.map(({ line, message }) => `<li>${format} 第 ${line} 行：${message}</li>`).join('')}</ul></details>` : ''}
+      ${plan.conflicts.length ? `<div class="conflict-group"><div class="conflict-heading"><div><h3>确认冲突字段</h3><p>每个字段选定一个要保存的值。同一表格内出现多个值时，也需要确认。</p></div>
       ${plan.conflicts.some((conflict) => conflict.candidates.some((candidate) => candidate.system)) ? `<button type="button" class="button secondary" data-action="keep-system" ${busy}>保留可用的系统值</button>` : ''}</div>
       ${plan.conflicts.map((conflict) => `<fieldset class="conflict"><legend>${esc(D.fieldName(conflict.field))}<small>${esc(conflict.id)}</small></legend>
-        <div class="conflict-options">${conflict.candidates.map((candidate, index) => `<label class="conflict-option"><input type="radio" name="conflict-${conflict.index}" data-conflict="${conflict.index}" value="${index}" ${choices.get(conflict.index) === index ? 'checked' : ''} ${busy}><span><strong>${candidate.system ? '系统值' : 'CSV 值'}${candidate.lines.length ? ` · 第 ${candidate.lines.join('、')} 行` : ''}</strong><span class="candidate-value">${esc(candidate.value)}</span></span></label>`).join('')}</div>
+        <div class="conflict-options">${conflict.candidates.map((candidate, index) => `<label class="conflict-option"><input type="radio" name="conflict-${conflict.index}" data-conflict="${conflict.index}" value="${index}" ${choices.get(conflict.index) === index ? 'checked' : ''} ${busy}><span><strong>${candidate.system ? '系统值' : format + ' 值'}${candidate.lines.length ? ` · 第 ${candidate.lines.join('、')} 行` : ''}</strong><span class="candidate-value">${esc(candidate.value)}</span></span></label>`).join('')}</div>
       </fieldset>`).join('')}</div>` : '<p class="preview-note">未发现字段冲突。</p>'}
       ${state.upload.error ? `<p class="form-error preview-error" role="alert">${icon('alert', 17)}${esc(state.upload.error)}</p>` : ''}
       <div class="preview-footer"><span id="import-feedback" aria-live="polite"></span><div><button type="button" class="button secondary" data-action="cancel-preview" ${busy}>取消预览</button><button type="button" id="commit-import" class="button primary" data-action="commit-import">${icon('check', 17)}确认并导入</button></div></div>
@@ -399,8 +403,27 @@
     main.querySelector('#commit-import').disabled = remaining > 0 || !upload.plan.counts.rows || upload.waiting;
   }
   function resetImport() {
-    state.upload = { source: '', doc: null, result: null, plan: null, waiting: false, committing: false, sequence: state.upload.sequence + 1, error: '', choices: new Map() };
+    state.upload = { source: '', doc: null, sheet: '', sheets: [], result: null, plan: null, waiting: false, committing: false, sequence: state.upload.sequence + 1, error: '', choices: new Map() };
     renderImport();
+  }
+  function excelFileData(file) {
+    if (file.size > 8 * 1024 * 1024) throw new Error('XLSX 文件超过 8 MiB，请拆分后再上传。');
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve({ name: file.name, format: 'xlsx', base64: reader.result.split(',', 2)[1] });
+      reader.onerror = () => reject(new Error('无法读取 XLSX 文件，请重新选择文件。'));
+      reader.readAsDataURL(file);
+    });
+  }
+  async function csvFileData(file) {
+    if (!/\.csv$/iu.test(file.name) && file.type !== 'text/csv') throw new Error('请选择 .csv 或 .xlsx 文件。');
+    const bytes = await file.arrayBuffer();
+    try {
+      const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+      return { name: file.name, text };
+    } catch {
+      throw new Error('无法读取文件编码，请将 CSV 保存为 UTF-8 后再上传。');
+    }
   }
   async function receiveFile(file) {
     const upload = state.upload;
@@ -408,21 +431,16 @@
     const sequence = ++upload.sequence;
     upload.plan = null;
     upload.doc = null;
+    upload.sheet = '';
+    upload.sheets = [];
     upload.result = null;
     upload.error = '';
     upload.waiting = true;
     render();
     try {
-      if (!/\.csv$/iu.test(file.name) && file.type !== 'text/csv') throw new Error('请选择扩展名为 .csv 的文件。');
-      const bytes = await file.arrayBuffer();
-      let text;
-      try {
-        text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-      } catch {
-        throw new Error('无法读取文件编码，请将 CSV 保存为 UTF-8 后再上传。');
-      }
+      const doc = await (/\.xlsx$/iu.test(file.name) ? excelFileData(file) : csvFileData(file));
       if (state.upload !== upload || sequence !== upload.sequence) return;
-      upload.doc = { name: file.name, text };
+      upload.doc = doc;
     } catch (error) {
       if (state.upload !== upload || sequence !== upload.sequence) return;
       upload.error = error.message;
@@ -435,7 +453,7 @@
   }
   async function prepareImport() {
     const upload = state.upload;
-    if (!allowed('csv.import') || !upload.doc || upload.waiting) return;
+    if (!allowed('csv.import') || !upload.doc || upload.waiting || (upload.sheets.length > 1 && !upload.sheet)) return;
     const sequence = ++upload.sequence;
     upload.plan = null;
     upload.choices = new Map();
@@ -443,10 +461,12 @@
     upload.waiting = true;
     render();
     try {
-      const { plan, snapshot } = await D.request('import/preview', { ...upload.doc, source: upload.source });
+      const { plan, sheets, snapshot } = await D.request('import/preview', { ...upload.doc, source: upload.source, sheet: upload.sheet || undefined });
       if (state.upload !== upload || sequence !== upload.sequence) return;
       acceptSnapshot(snapshot);
-      if (plan.revision < state.snapshot.revision) throw new Error('工单已经更新，请重新生成预览后再确认。');
+      if (plan && plan.revision < state.snapshot.revision) throw new Error('工单已经更新，请重新生成预览后再确认。');
+      upload.sheets = sheets ?? [];
+      upload.sheet = plan?.sheet ?? '';
       upload.plan = plan;
     } catch (error) {
       if (state.upload !== upload || sequence !== upload.sequence) return;
@@ -456,6 +476,7 @@
         upload.waiting = false;
         render();
         if (upload.plan && state.page === 'import') main.querySelector('#preview-heading').focus();
+        else if (state.page === 'import' && upload.sheets.length > 1 && !upload.sheet) main.querySelector('#import-sheet').focus();
       }
     }
   }
@@ -468,10 +489,10 @@
     renderImport();
     try {
       const { snapshot, batch } = await D.request('import/commit', {
-        ...upload.doc, source: upload.source, token: upload.plan.token, revision: upload.plan.revision, choices: [...upload.choices]
+        ...upload.doc, source: upload.source, sheet: upload.plan.sheet, token: upload.plan.token, revision: upload.plan.revision, choices: [...upload.choices]
       });
       acceptSnapshot(snapshot);
-      upload.result = { id: batch.id, name: batch.name, inserted: batch.inserted, updated: batch.updated, skipped: batch.issues.length };
+      upload.result = { id: batch.id, name: batch.name, sheet: batch.sheet, inserted: batch.inserted, updated: batch.updated, skipped: batch.issues.length };
       upload.plan = null;
       notify(batch.inserted || batch.updated ? '已写入工单和导入批次' : '仅记录批次，工单字段未改动');
     } catch (error) {
@@ -587,10 +608,10 @@
   function timelineView(record, editor) {
     const entries = [...record.work.history];
     const batches = new Map(state.snapshot.batches.map((batch) => [batch.id, batch]));
-    const recordedBatches = new Set(entries.filter((event) => event.via === 'csv').map((event) => event.id));
+    const recordedBatches = new Set(entries.filter((event) => event.type === 'batch').map((event) => event.id));
     for (const batch of batches.values()) {
       if (recordedBatches.has(batch.id) || !batch.decisions.some((decision) => decision.uid === record.uid)) continue;
-      entries.push({ at: batch.at, type: 'batch', id: batch.id, actor: batch.actor, revision: batch.revision, via: 'csv', changes: [] });
+      entries.push({ at: batch.at, type: 'batch', id: batch.id, actor: batch.actor, revision: batch.revision, via: batch.format ?? 'csv', changes: [] });
     }
     entries.sort((left, right) => right.revision - left.revision);
     const fields = new Map(entries.flatMap((event) => event.changes.map((field) => [diffKey(field), diffName(field)])));
@@ -602,13 +623,14 @@
       <ol class="timeline">${visible.map((entry) => {
       const related = entry.target ? state.snapshot.records.find((candidate) => candidate.uid === entry.target) : null;
       const batch = batches.get(entry.id);
-      const title = F.labels[entry.type] ?? (batch ? 'CSV 导入批次' : '新建工单');
+      const format = formatName(entry.via);
+      const title = F.labels[entry.type] ?? (batch ? format + ' 导入批次' : '新建工单');
       const changes = selected ? entry.changes.filter((field) => diffKey(field) === selected) : entry.changes;
       const decisions = batch?.decisions.filter((decision) => decision.uid === record.uid).length ?? 0;
       return `<li><i></i><div><strong>${title}</strong><p class="timeline-meta">
-        <time datetime="${new Date(entry.at).toISOString()}">${F.auditStamp(entry.at)}（北京时间）</time> · ${esc(F.actorLabel(entry.actor))} · ${entry.via === 'csv' ? 'CSV 导入' : '人工操作'}</p>
+        <time datetime="${new Date(entry.at).toISOString()}">${F.auditStamp(entry.at)}（北京时间）</time> · ${esc(F.actorLabel(entry.actor))} · ${entry.type === 'batch' ? format + ' 导入' : '人工操作'}</p>
         ${entry.note ? `<p class="timeline-note">${esc(entry.note)}</p>` : ''}
-        ${batch ? `<p class="timeline-note">${esc(batch.name)}${decisions ? ` · ${decisions} 项冲突决策` : ''}</p>` : ''}
+        ${batch ? `<p class="timeline-note">${esc(batch.name)}${batch.sheet ? ' · ' + esc(batch.sheet) : ''}${decisions ? ` · ${decisions} 项冲突决策` : ''}</p>` : ''}
         ${changes.length ? auditDiff(changes) : '<p class="quiet">工单字段未改动</p>'}
         ${related ? `<button type="button" class="text-link" data-action="open-ticket" data-uid="${esc(related.uid)}">${esc(D.valueOf(related, D.ID))}${icon('arrow', 15)}</button>` : ''}
         ${batch ? `<button type="button" class="text-link" data-action="show-batch" data-batch="${esc(batch.id)}">查看该批次${icon('arrow', 15)}</button>` : ''}</div></li>`;
@@ -631,27 +653,28 @@
     const selected = state.snapshot.batches.find((batch) => batch.id === state.batchId);
     if (!selected) {
       const list = state.snapshot.batches;
-      main.innerHTML = titleMarkup('导入批次', '回查文件、字段合并及冲突决策。', allowed('csv.import') ? `<a class="button primary" href="#import">${icon('upload', 17)}导入 CSV</a>` : '') +
-        `<section class="panel batch-panel" aria-label="CSV 批次记录">${list.length ? `<div class="table-scroll"><table class="tickets-table"><thead><tr><th scope="col">批次文件</th><th scope="col">来源</th><th scope="col">导入时间</th><th scope="col">导入人</th><th scope="col">有效记录</th><th scope="col">写入结果</th><th scope="col">冲突决策</th></tr></thead><tbody>
-        ${list.map((batch) => `<tr><td><button class="ticket-link" type="button" data-action="show-batch" data-batch="${esc(batch.id)}">${esc(batch.name)}</button></td><td>${sourceBadge(batch.source)}</td><td>${F.stamp(batch.at)}</td><td>${esc(F.actorLabel(batch.actor))}</td><td>${batch.counts.rows}</td><td>${batch.inserted || batch.updated ? `新增 ${batch.inserted} · 更新 ${batch.updated}` : '仅记录批次'}</td><td>${batch.decisions.length}</td></tr>`).join('')}</tbody></table></div>` : emptyState('暂无导入批次', '导入完成后会在这里记录文件、统计和冲突决策。') }</section>`;
+      main.innerHTML = titleMarkup('导入批次', '回查文件、字段合并及冲突决策。', allowed('csv.import') ? `<a class="button primary" href="#import">${icon('upload', 17)}导入表格</a>` : '') +
+        `<section class="panel batch-panel" aria-label="导入批次记录">${list.length ? `<div class="table-scroll"><table class="tickets-table"><thead><tr><th scope="col">批次文件</th><th scope="col">来源</th><th scope="col">导入时间</th><th scope="col">导入人</th><th scope="col">有效记录</th><th scope="col">写入结果</th><th scope="col">冲突决策</th></tr></thead><tbody>
+        ${list.map((batch) => `<tr><td><button class="ticket-link" type="button" data-action="show-batch" data-batch="${esc(batch.id)}">${esc(batch.name)}</button>${batch.sheet ? `<span class="quiet"> · ${esc(batch.sheet)}</span>` : ''}</td><td>${sourceBadge(batch.source)}</td><td>${F.stamp(batch.at)}</td><td>${esc(F.actorLabel(batch.actor))}</td><td>${batch.counts.rows}</td><td>${batch.inserted || batch.updated ? `新增 ${batch.inserted} · 更新 ${batch.updated}` : '仅记录批次'}</td><td>${batch.decisions.length}</td></tr>`).join('')}</tbody></table></div>` : emptyState('暂无导入批次', '导入完成后会在这里记录文件、统计和冲突决策。') }</section>`;
       return;
     }
     const batch = selected;
+    const format = formatName(batch.format);
     const count = batch.counts;
     const stats = [['有效记录',count.rows],['新增工单',batch.inserted],['更新工单',batch.updated],['自动补齐格',count.filled],['相同跳过格',count.equal],['保留原值格',count.preserved]];
-    main.innerHTML = titleMarkup('批次详情', `${esc(batch.name)} · ${D.sources[batch.source].name} · ${F.auditStamp(batch.at)}（北京时间） · ${esc(F.actorLabel(batch.actor))}`, button('back-batches', '返回批次列表')) +
+    main.innerHTML = titleMarkup('批次详情', `${esc(batch.name)} · ${format}${batch.sheet ? ' · ' + esc(batch.sheet) : ''} · ${D.sources[batch.source].name} · ${F.auditStamp(batch.at)}（北京时间） · ${esc(F.actorLabel(batch.actor))}`, button('back-batches', '返回批次列表')) +
       `<section class="panel batch-panel"><div class="panel-heading"><div><h2>${batch.effects.length ? '工单字段已写入' : '仅记录批次'}</h2><p>${batch.effects.length ? '可查看实际变更和发生冲突时的取值。' : '本次没有改动或新增工单。'}</p></div></div>
       <div class="preview-body"><div class="preview-stats">${stats.map(([label,value]) => `<div><strong>${number.format(value)}</strong><span>${label}</span></div>`).join('')}</div>
-      ${batch.issues.length ? `<details class="invalid-rows"><summary>${batch.issues.length} 行已跳过</summary><ul>${batch.issues.map((item) => `<li>CSV 第 ${item.line} 行：${item.message}</li>`).join('')}</ul></details>` : ''}
-      <section class="batch-section"><h3>冲突决策 <span>${batch.decisions.length}</span></h3>${batch.decisions.length ? batch.decisions.map((decision) => `<details class="batch-entry"><summary>${esc(decision.id)} · ${esc(D.fieldName(decision.field))} · ${decision.selected.system ? '采用系统值' : '采用 CSV 值'}</summary><div><p class="audit-value"><b>保存值</b> ${esc(decision.selected.value)}</p>
-      ${decision.candidates.map((candidate) => `<p class="audit-value"><b>${candidate.system ? '系统值' : 'CSV 值'}${candidate.lines.length ? ' · 行 ' + candidate.lines.join('、') : ''}</b> ${esc(candidate.value)}</p>`).join('')}
+      ${batch.issues.length ? `<details class="invalid-rows"><summary>${batch.issues.length} 行已跳过</summary><ul>${batch.issues.map((item) => `<li>${format} 第 ${item.line} 行：${item.message}</li>`).join('')}</ul></details>` : ''}
+      <section class="batch-section"><h3>冲突决策 <span>${batch.decisions.length}</span></h3>${batch.decisions.length ? batch.decisions.map((decision) => `<details class="batch-entry"><summary>${esc(decision.id)} · ${esc(D.fieldName(decision.field))} · ${decision.selected.system ? '采用系统值' : '采用 ' + format + ' 值'}</summary><div><p class="audit-value"><b>保存值</b> ${esc(decision.selected.value)}</p>
+      ${decision.candidates.map((candidate) => `<p class="audit-value"><b>${candidate.system ? '系统值' : format + ' 值'}${candidate.lines.length ? ' · 行 ' + candidate.lines.join('、') : ''}</b> ${esc(candidate.value)}</p>`).join('')}
       ${decision.uid ? `<button type="button" class="text-link" data-action="open-ticket" data-uid="${esc(decision.uid)}">打开工单${icon('arrow', 15)}</button>` : ''}</div></details>`).join('') : '<p class="quiet">本批次没有需要确认的冲突。</p>'}</section>
       <section class="batch-section"><h3>工单字段变更 <span>${batch.effects.length}</span></h3>${batch.effects.length ? batch.effects.map((effect) => `<details class="batch-entry"><summary>${effect.kind === 'inserted' ? '新增' : '更新'} · ${esc(effect.eventId)} · ${effect.fields.length} 个字段</summary>
       <div><button type="button" class="text-link" data-action="open-ticket" data-uid="${esc(effect.uid)}">打开工单${icon('arrow', 15)}</button><dl class="batch-diff">${effect.fields.map((field) => `<div><dt>${esc(D.fieldName(field.key))}</dt><dd><span>${field.before === null ? '未存在' : (esc(field.before) || '空值')}</span><span aria-label="改为">→</span><b>${esc(field.after) || '空值'}</b></dd></div>`).join('')}</dl></div></details>`).join('') : '<p class="quiet">没有变更记录。</p>'}</section></div></section>`;
   }
 
   function entryField(key, index, values, allowMultiline = false) {
-    const name = key === D.STATUS ? '来源状态（CSV 当前状态）' : D.fieldName(key);
+    const name = key === D.STATUS ? '来源状态（表格当前状态）' : D.fieldName(key);
     const value = values.get(key) ?? '';
     const isLong = key === D.SYMPTOM || key === D.ROOT || key === '恢复手段' || key === '告警内容（ARMS）' || key === '完整原始推送体' || /[\r\n]/u.test(value);
     const attrs = `id="field-${index}" name="field-${index}" data-field="${index}"`;
@@ -690,7 +713,7 @@
         ${editor.uid ? '' : `<label class="editor-field editor-source"><span>表格来源</span><select id="editor-source">${sourceOptions(editor.source)}</select></label>`}
         <fieldset class="field-group"><legend>故障信息</legend><div class="editor-grid">${essential.map((key, index) => entryField(key, index, values)).join('')}</div></fieldset>
         <fieldset class="field-group"><legend>来源与时间字段</legend><div class="editor-grid">${remaining.map((key, index) => entryField(key, index + essential.length, values)).join('')}</div></fieldset>
-        ${extra.length ? `<fieldset class="field-group"><legend>CSV 附加字段</legend><div class="editor-grid">${extra.map((key, index) => entryField(key, index + essential.length + remaining.length, values, true)).join('')}</div></fieldset>` : ''}
+        ${extra.length ? `<fieldset class="field-group"><legend>表格附加字段</legend><div class="editor-grid">${extra.map((key, index) => entryField(key, index + essential.length + remaining.length, values, true)).join('')}</div></fieldset>` : ''}
         <datalist id="editor-status">${Object.entries(D.stages).filter(([stage]) => stage !== 'other').map(([, stage]) => `<option value="${stage.label}"></option>`).join('')}</datalist>
       </div>
       <div class="drawer-footer"><p id="editor-error" class="form-error" role="alert" hidden></p><div>${button('close-editor', editable ? '取消' : '完成查看')}${editable ? '<button type="submit" class="button primary">保存工单</button>' : ''}</div></div>
@@ -979,13 +1002,13 @@
       state.filters[target.id === 'ticket-source' ? 'source' : 'status'] = target.value;
       state.filters.page = 1;
       renderTicketResults();
-    } else if (target.id === 'import-source') {
+    } else if (target.id === 'import-source' || target.id === 'import-sheet') {
       if (state.upload.committing) return;
       if (state.upload.waiting && state.upload.doc) {
         state.upload.sequence += 1;
         state.upload.waiting = false;
       }
-      state.upload.source = target.value;
+      state.upload[target.id === 'import-source' ? 'source' : 'sheet'] = target.value;
       state.upload.plan = null;
       state.upload.choices = new Map();
       state.upload.error = '';

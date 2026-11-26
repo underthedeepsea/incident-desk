@@ -247,14 +247,17 @@ function serve({ host, port, filename, publicOrigin, slaHours }) {
         if (key === '/api/import/preview' || key === '/api/import/commit') {
           accounts.context(token, permission.csv);
           const payload = await jsonBody(request, limits.bodyBytes);
+          const xlsx = payload?.format === 'xlsx'
+            ? await importer.prepareXlsx(payload, token, key === '/api/import/commit')
+            : null;
           if (key === '/api/import/preview') {
             const result = store.view(token, permission.csv, (state, viewer) => ({
-              plan: importer.preview(state, payload, token), snapshot: snapshot(state, viewer)
+              ...importer.preview(state, payload, token, xlsx), snapshot: snapshot(state, viewer)
             }));
             send(response, 200, result);
           } else {
             send(response, 200, mutate(token, permission.csv, payload,
-              (before, at, actor) => importer.commit(before, payload, at, actor, token)));
+              (before, at, actor) => importer.commit(before, payload, at, actor, token, xlsx)));
           }
           return;
         }

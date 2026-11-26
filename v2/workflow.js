@@ -175,7 +175,8 @@ const incidentFlow = ((D) => {
     });
     const batch = {
       id: D.newUid(), at, actor, revision: snapshot.revision + 1, name: doc.name, source: plan.source, counts: plan.counts, issues: plan.invalidRows, decisions,
-      inserted: outcome.inserted, updated: outcome.updated, effects
+      inserted: outcome.inserted, updated: outcome.updated, effects,
+      ...(doc.format === 'xlsx' ? { format: doc.format, sheet: doc.sheet } : {})
     };
     return { ...snapshot, clockAt: at, records, batches: [batch, ...snapshot.batches] };
   }

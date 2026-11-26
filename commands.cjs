@@ -3,6 +3,7 @@
 const { createHmac, randomBytes, timingSafeEqual } = require('node:crypto');
 const D = require('./v2/data.js');
 const F = require('./v2/workflow.js');
+const { readXlsx, maxFileBytes, identifierCell } = require('./xlsx-import.cjs');
 
 class RequestError extends Error {
   constructor(message, status = 400, code = 'invalid') {
@@ -89,38 +90,72 @@ function createImporter() {
   const secret = randomBytes(32);
   function documentOf(payload) {
     if (!isObject(payload) || typeof payload.name !== 'string' || !payload.name.trim()
-      || typeof payload.text !== 'string' || !payload.text.isWellFormed() || typeof payload.source !== 'string' || (payload.source !== '' && !Object.hasOwn(D.sources, payload.source))) {
-      throw new RequestError('请选择有效的 CSV 文件和告警来源。');
+      || typeof payload.source !== 'string' || (payload.source !== '' && !Object.hasOwn(D.sources, payload.source))) {
+      throw new RequestError('请选择有效的告警表格和告警来源。');
     }
-    return { name: payload.name, text: payload.text, source: payload.source };
+    const { name, source, format = 'csv' } = payload;
+    if (format === 'csv' && typeof payload.text === 'string' && payload.text.isWellFormed()) {
+      return { name, source, format, content: payload.text };
+    }
+    if (format === 'xlsx' && /\.xlsx$/iu.test(name) && typeof payload.base64 === 'string' &&
+      (payload.sheet === undefined || (typeof payload.sheet === 'string' && payload.sheet.length <= 31))) {
+      if (payload.base64.length > 4 * Math.ceil(maxFileBytes / 3)) {
+        throw new RequestError('XLSX 文件超过 8 MiB，请拆分后再上传。', 413, 'too_large');
+      }
+      return { name, source, format, sheet: payload.sheet, content: payload.base64 };
+    }
+    throw new RequestError('请选择 UTF-8 CSV 或 Excel .xlsx 文件，确认文件格式后重新上传。');
   }
 
   function signature(revision, doc, sessionToken) {
-    return createHmac('sha256', secret).update(JSON.stringify([revision, doc.name, doc.source, doc.text, sessionToken])).digest();
+    return createHmac('sha256', secret).update(JSON.stringify([revision, doc.name, doc.source, doc.format, doc.sheet, doc.content, sessionToken])).digest();
   }
 
-  function calculate(state, doc) {
-    return rule(() => D.planImport(state, D.readCsv(doc.text, doc.source)));
+  function requirePreview(revision, doc, token, sessionToken) {
+    if ((doc.format === 'xlsx' && !doc.sheet) || typeof token !== 'string' || !/^[A-Za-z0-9_-]{43}$/u.test(token)
+      || !timingSafeEqual(Buffer.from(token, 'base64url'), signature(revision, doc, sessionToken))) {
+      throw new RequestError('预览无效，请重新生成预览后再确认。', 400, 'invalid_preview');
+    }
+  }
+
+  function calculate(state, doc, xlsx) {
+    return rule(() => D.planImport(state, xlsx
+      ? D.readRows(xlsx.rows, doc.source, 'XLSX', identifierCell)
+      : D.readCsv(doc.content, doc.source)));
   }
 
   return {
-    preview(state, payload, sessionToken) {
+    async prepareXlsx(payload, sessionToken, commit) {
       const doc = documentOf(payload);
-      const plan = calculate(state, doc);
-      return {
+      if (commit) requirePreview(revisionOf(payload), doc, payload.token, sessionToken);
+      const bytes = Buffer.from(doc.content, 'base64');
+      if (bytes.length > maxFileBytes) throw new RequestError('XLSX 文件超过 8 MiB，请拆分后再上传。', 413, 'too_large');
+      if (bytes.toString('base64') !== doc.content) throw new RequestError('XLSX 文件数据不完整，请重新上传。');
+      let xlsx;
+      try {
+        xlsx = await readXlsx(bytes, doc.sheet);
+      } catch (error) {
+        throw new RequestError(error.message);
+      }
+      if (!xlsx.names.length) throw new RequestError('XLSX 没有可见的数据工作表，请取消隐藏告警表或补齐数据后重试。');
+      if (doc.sheet && !xlsx.sheet) throw new RequestError('所选工作表为空或不存在，请重新选择告警工作表。');
+      return { ...xlsx, doc: { ...doc, sheet: xlsx.sheet } };
+    },
+    preview(state, payload, sessionToken, xlsx) {
+      if (xlsx && !xlsx.sheet) return { plan: null, sheets: xlsx.names };
+      const doc = xlsx?.doc ?? documentOf(payload);
+      const plan = calculate(state, doc, xlsx);
+      return { sheets: xlsx?.names, plan: {
         source: plan.source, revision: plan.revision, counts: plan.counts,
         invalidRows: plan.invalidRows, conflicts: plan.conflicts,
+        ...(xlsx ? { format: doc.format, sheet: doc.sheet } : {}),
         token: signature(state.revision, doc, sessionToken).toString('base64url')
-      };
+      } };
     },
-    commit(state, payload, at, actor, sessionToken) {
-      const doc = documentOf(payload);
-      const token = payload.token;
-      if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{43}$/u.test(token)
-        || !timingSafeEqual(Buffer.from(token, 'base64url'), signature(state.revision, doc, sessionToken))) {
-        throw new RequestError('预览无效，请重新生成预览后再确认。', 400, 'invalid_preview');
-      }
-      const plan = calculate(state, doc);
+    commit(state, payload, at, actor, sessionToken, xlsx) {
+      const doc = xlsx?.doc ?? documentOf(payload);
+      requirePreview(state.revision, doc, payload.token, sessionToken);
+      const plan = calculate(state, doc, xlsx);
       if (!plan.counts.rows) throw new RequestError('此文件没有可导入的记录。');
       const choices = new Map();
       if (Array.isArray(payload.choices)) {

@@ -104,7 +104,7 @@ function createStore(db, accounts) {
       });
     }
     const entry = {
-      ...event, via: refs.batch ? 'csv' : 'manual', revision: refs.revision, changes
+      ...event, via: refs.batch ? refs.batch.format ?? 'csv' : 'manual', revision: refs.revision, changes
     };
     return {
       ...record,

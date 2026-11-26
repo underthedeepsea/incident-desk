@@ -284,3 +284,72 @@ test('admin sidebar, assignable custom role, scoped controls and revocation in a
   assert.equal(await scoped.getByRole('button', { name: '查看工单 RBAC-WRONG-TAB' }).count(), 0);
   assert.deepEqual(errors, []);
 });
+
+test('browser file selection and drag-and-drop import a chosen XLSX tab', { timeout: 35_000 }, async (t) => {
+  const { writeFile } = require('node:fs/promises');
+  const XLSX = require('xlsx');
+  const s = await testService(t);
+  await s.bootstrap();
+  const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE, headless: true });
+  t.after(() => browser.close());
+  const context = await browser.newContext({ ignoreHTTPSErrors: true, locale: 'zh-CN', viewport: { width: 1000, height: 840 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(8000);
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.goto(s.origin + '/v2/');
+  await signIn(page, 'alice', false);
+
+  function bytes(sheets) {
+    const book = XLSX.utils.book_new();
+    for (const [name, rows] of Object.entries(sheets)) {
+      XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet(rows), name);
+    }
+    return XLSX.write(book, { type: 'buffer', bookType: 'xlsx' });
+  }
+
+  await clickNav(page, 'import');
+  const file = join(s.directory, '真实上传.xlsx');
+  await writeFile(file, bytes({
+    '备用GPU': [['故障事件id', '主机名称'], ['UNSELECTED', 'gpu']],
+    '活动PD': [[], ['故障事件id', 'PD应用实例'], ['XLSX-APP', 'worker'], [null, '无 ID']]
+  }));
+  const prepare = page.locator('[data-action=prepare-import]');
+  await page.locator('#csv-file').setInputFiles(file);
+  await prepare.click();
+  const selector = page.getByLabel('Excel 工作表');
+  await selector.waitFor();
+  assert.equal(await page.locator('#commit-import').count(), 0);
+  assert.equal(await prepare.isDisabled(), true);
+  await selector.selectOption('活动PD');
+  await prepare.click();
+  await heading(page, '合并预览').waitFor();
+  await page.getByText('XLSX 第 4 行', { exact: false }).waitFor();
+  await page.locator('#commit-import').click();
+  await heading(page, '导入完成').waitFor();
+  await page.getByRole('button', { name: '查看批次' }).click();
+  await heading(page, '批次详情').waitFor();
+  await page.getByText('真实上传.xlsx · XLSX · 活动PD', { exact: false }).waitFor();
+  await clickNav(page, 'tickets');
+  await open(page, 'XLSX-APP');
+  await drawer(page).getByRole('button', { name: '时间线', exact: true }).click();
+  await drawer(page).getByText('XLSX 导入批次', { exact: true }).waitFor();
+  assert.match(await drawer(page).locator('.timeline-meta').first().textContent(), /XLSX 导入/u);
+  await drawer(page).getByRole('button', { name: '关闭工单' }).click();
+  assert.equal(await page.getByRole('button', { name: '查看工单 UNSELECTED' }).count(), 0);
+
+  await clickNav(page, 'import');
+  await page.getByRole('button', { name: '继续导入' }).click();
+  const drag = await page.evaluateHandle((base64) => {
+    const dataTransfer = new DataTransfer();
+    const file = new File([Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))], '拖入.xlsx');
+    dataTransfer.items.add(file);
+    return dataTransfer;
+  }, bytes({ '混合云': [['故障事件id', '记录类型'], ['XLSX-DROP', 'ALERT']] }).toString('base64'));
+  await page.locator('#drop-zone').dispatchEvent('drop', { dataTransfer: drag });
+  await prepare.click();
+  await heading(page, '合并预览').waitFor();
+  await page.locator('#commit-import').click();
+  await heading(page, '导入完成').waitFor();
+  assert.deepEqual(errors, []);
+});

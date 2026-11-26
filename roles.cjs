@@ -13,7 +13,7 @@ const businessPermissions = [
   { id: permission.fields, name: '编辑来源字段' },
   { id: permission.action, name: '处置工单与转派负责人' },
   { id: permission.links, name: '建立或解除工单关联' },
-  { id: permission.csv, name: 'CSV 导入（可新建工单和更新来源字段）' }
+  { id: permission.csv, name: '表格导入（可新建工单和更新来源字段）' }
 ];
 const businessIds = businessPermissions.map(({ id }) => id);
 const builtins = [

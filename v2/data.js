@@ -143,9 +143,11 @@ const incidentData = (() => {
     return matches.length === 1 ? matches[0] : '';
   }
   function readCsv(text, selectedSource) {
-    const parsed = parseCsv(text);
+    return readRows(parseCsv(text), selectedSource, 'CSV');
+  }
+  function readRows(parsed, selectedSource, format, validateCell = () => {}) {
     const heading = parsed.findIndex((row) => row.values.some((value) => !isBlank(value)));
-    if (heading < 0) throw new Error('CSV 文件没有表头或数据。');
+    if (heading < 0) throw new Error(`${format} 文件没有表头或数据。`);
     const header = parsed[heading].values;
     const source = selectedSource || detectSource(header);
     if (!source) throw new Error('无法从表头辨认告警来源，请先选择此文件的表格来源。');
@@ -161,6 +163,7 @@ const incidentData = (() => {
     const invalidRows = [];
     for (const row of parsed.slice(heading + 1)) {
       if (row.values.every(isBlank)) continue;
+      fields.forEach((field, index) => validateCell(row, index, field));
       if (row.values.length > fields.length) {
         invalidRows.push({ line: row.line, message: '数据的列数多于表头' });
       } else if (isBlank(row.values[idIndex] ?? '') || row.values[idIndex].includes(ANONYMOUS)) {
@@ -173,7 +176,7 @@ const incidentData = (() => {
         });
       }
     }
-    if (!rows.length && !invalidRows.length) throw new Error('CSV 表头下面没有数据行。');
+    if (!rows.length && !invalidRows.length) throw new Error(`${format} 表头下面没有数据行。`);
     return { source, rows, invalidRows };
   }
 
@@ -316,7 +319,7 @@ const incidentData = (() => {
   const read = async () => (await request('workspace')).snapshot;
 
   return { ID, STATUS, SYMPTOM, ROOT, BU, ANONYMOUS, sources, stages, pad, shiftDay, datePart, timePart, statusKey, valueOf, isBlank, fieldName, identity, getTime, newUid,
-    readCsv, planImport, applyImport, read, request, bindSession, watchSession };
+    readCsv, readRows, planImport, applyImport, read, request, bindSession, watchSession };
 })();
 if (typeof module === 'object' && module.exports) module.exports = incidentData;
 else window.IncidentData = incidentData;
