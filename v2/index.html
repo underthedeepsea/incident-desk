@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>计算智算工单分析系统</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="duty.css">
+  <link rel="stylesheet" href="production.css">
+  <script defer src="data.js"></script>
+  <script defer src="workflow.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <aside class="sidebar" aria-label="主导航">
+    <a class="brand" href="#dashboard" aria-label="计算智算工单分析系统首页">
+      <span class="brand-mark" aria-hidden="true">
+        <svg width="25" height="25" viewBox="0 0 32 32" fill="none"><path d="M7 21h5.2l4-10 3.7 7H25" stroke="currentColor" stroke-width="2.65" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 11h5m8 10h5" stroke="currentColor" stroke-opacity=".66" stroke-width="2.4" stroke-linecap="round"/></svg>
+      </span>
+      <strong><span>计算智算</span><span>工单分析系统</span></strong>
+    </a>
+    <div class="nav-section">
+      <p>工作台</p>
+      <nav id="navigation"></nav>
+    </div>
+    <div class="sidebar-footer">
+      <span id="storage-icon" class="storage-icon"></span>
+      <div><strong>工单工作区</strong><small>字段修改留有记录</small></div>
+    </div>
+  </aside>
+
+  <div class="app">
+    <header class="topbar">
+      <div class="breadcrumb"><span>运维工作台</span><span id="breadcrumb-arrow"></span><strong id="breadcrumb">值班工作台</strong></div>
+      <div class="topbar-end">
+        <details class="account-menu">
+          <summary><span id="account-name">我的账号</span><span id="account-role" class="workspace-badge"></span></summary>
+          <div class="account-menu-links">
+            <a href="/login?password=1">更改密码</a>
+            <button type="button" data-action="sign-out">退出登录</button>
+          </div>
+        </details>
+      </div>
+    </header>
+    <main id="main" tabindex="-1" aria-live="off"><div class="loading">正在打开工作台…</div></main>
+  </div>
+  <dialog id="ticket-dialog" aria-labelledby="ticket-title"></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - workload.yaml
+  - ingress.yaml
+
+configMapGenerator:
+  - name: incident-desk-config
+    literals:
+      - PUBLIC_ORIGIN=https://tickets.example.com
+      - SLA_P1_HOURS=2
+      - SLA_P2_HOURS=8
+      - SLA_P3_HOURS=24
+      - SLA_P4_HOURS=72
+
+images:
+  - name: incident-desk-image
+    newName: registry.example.com/operations/incident-desk
+    newTag: v2-production-1

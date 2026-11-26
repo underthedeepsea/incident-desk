@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>账号与权限 · 计算智算工单分析系统</title>
+  <link rel="stylesheet" href="/v2/styles.css">
+  <link rel="stylesheet" href="/v2/duty.css">
+  <link rel="stylesheet" href="/v2/production.css">
+  <script defer src="/v2/data.js"></script>
+  <script defer src="/v2/workflow.js"></script>
+  <script defer src="/v2/manage.js"></script>
+</head>
+<body class="manage-page">
+  <header class="topbar"><div class="breadcrumb"><span>运维工作台</span><strong>账号与权限</strong></div><a href="/v2/" class="text-link">返回工作台</a></header>
+  <main id="manage-main">
+    <div class="page-heading"><div><h1>账号与权限</h1><p class="page-description">为每位同事建立独立账号。临时密码须在首次登录后更改。</p></div></div>
+    <p class="form-error" role="alert" id="account-error" hidden></p>
+    <p role="status" id="account-message" hidden></p>
+    <section class="panel account-panel">
+      <h2>新建账号</h2>
+      <form id="create-account" class="account-form" method="post" action="/api/accounts">
+        <label class="editor-field"><span>账号</span><input name="username" pattern="[a-zA-Z0-9][a-zA-Z0-9._\-]{2,63}" maxlength="64" autocomplete="off" required></label>
+        <label class="editor-field"><span>真实姓名</span><input name="displayName" maxlength="80" autocomplete="off" required></label>
+        <label class="editor-field"><span>角色</span><select name="role" required></select></label>
+        <label class="editor-field"><span>临时密码（至少 15 个字符）</span><input name="password" type="password" autocomplete="new-password" minlength="15" maxlength="256" required></label>
+        <button class="button primary" type="submit" disabled>创建账号</button>
+      </form>
+    </section>
+    <section class="panel account-panel"><h2>账号列表</h2><div id="account-list">正在载入…</div></section>
+    <section class="panel account-panel">
+      <h2>角色与功能</h2>
+      <p class="page-description">每个账号使用一个角色。所有角色都能查看工作台、工单、时间线与导入批次。</p>
+      <div id="role-list">正在载入…</div>
+      <details class="batch-entry account-entry create-role">
+        <summary>新建自定义角色</summary>
+        <form id="create-role" class="role-form" method="post" data-path="roles" action="/api/roles">
+          <label class="editor-field"><span>角色名称</span><input name="name" maxlength="80" required></label>
+          <fieldset class="role-permissions"><legend>业务功能</legend><div id="create-role-permissions"></div></fieldset>
+          <button type="submit" class="button primary" disabled>创建角色</button>
+        </form>
+      </details>
+    </section>
+    <section class="panel account-panel"><h2>最近的账号与角色操作</h2><div id="account-history"></div></section>
+  </main>
+</body>
+</html>
